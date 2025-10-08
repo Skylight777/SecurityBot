@@ -1,5 +1,6 @@
 import os
 import asyncio
+import threading
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -8,12 +9,11 @@ from telegram.ext import (
     CallbackQueryHandler,
     filters,
 )
-from aiohttp import web
-import threading
+from flask import Flask
 
 # === 🔹 Налаштування ===
-TOKEN = os.environ.get("BOT_TOKEN")  # свій токен з Render environment
-GROUP_ID = int(os.environ.get("GROUP_ID"))  # ID групи, наприклад -1001234567890
+TOKEN = os.environ.get("BOT_TOKEN")
+GROUP_ID = int(os.environ.get("GROUP_ID"))
 
 # === 🔹 Обробка нових повідомлень ===
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -50,7 +50,6 @@ async def callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = query.data.split("|")
     action = data[0]
-    user_id = data[1]
 
     if action == "approve":
         text = data[2]
@@ -59,34 +58,26 @@ async def callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == "reject":
         await query.edit_message_text("❌ Повідомлення відхилено!")
 
-# === 🔹 Вебсервер для Render ===
-async def handle(request):
-    return web.Response(text="Bot is running!")
+# === 🔹 Flask вебсервер для Render ===
+app = Flask(__name__)
 
-async def run_web():
-    app = web.Application()
-    app.router.add_get('/', handle)
+@app.route("/")
+def home():
+    return "Bot is running!"
+
+def run_flask():
     port = int(os.environ.get("PORT", 10000))
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-
-def start_web():
-    import asyncio
-    asyncio.run(run_web())
-
-threading.Thread(target=start_web).start()
+    app.run(host="0.0.0.0", port=port)
 
 # === 🔹 Запуск бота ===
 async def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    app.add_handler(CallbackQueryHandler(callback_query))
+    tg_app = ApplicationBuilder().token(TOKEN).build()
+    tg_app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    tg_app.add_handler(CallbackQueryHandler(callback_query))
 
     print("✅ Бот запущений і працює!")
-    await app.run_polling()
+    await tg_app.run_polling()
 
 if __name__ == "__main__":
+    threading.Thread(target=run_flask).start()
     asyncio.run(main())
