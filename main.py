@@ -4,107 +4,89 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
-    CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
     filters,
 )
+from aiohttp import web
+import threading
 
-# 🔹 Твій токен бота
-TOKEN = os.getenv("BOT_TOKEN")
+# === 🔹 Налаштування ===
+TOKEN = os.environ.get("BOT_TOKEN")  # свій токен з Render environment
+GROUP_ID = int(os.environ.get("GROUP_ID"))  # ID групи, наприклад -1001234567890
 
-# 🔹 ID чату адміністратора (кому приходять повідомлення на модерацію)
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
-
-# 🔹 ID групи, куди публікуються схвалені повідомлення
-GROUP_ID = int(os.getenv("GROUP_ID"))
-
-# 🧠 /start команда
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Привіт! Я бот для модерації повідомлень у групі.")
-
-# 🧠 Обробка нових повідомлень у групі
+# === 🔹 Обробка нових повідомлень ===
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    text = update.message.text
-    message_id = update.message.message_id
+    if update.message and update.message.chat.id == GROUP_ID:
+        user = update.message.from_user
+        text = update.message.text or "(немає тексту)"
 
-    # Зберігаємо дані про повідомлення
-    context.user_data[message_id] = {
-        "user_id": user.id,
-        "username": user.username or user.first_name,
-        "text": text
-    }
+        # Видаляємо повідомлення з групи
+        await update.message.delete()
 
-    # Кнопки схвалення/відхилення
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ Схвалити", callback_data=f"approve|{message_id}"),
-            InlineKeyboardButton("❌ Відхилити", callback_data=f"reject|{message_id}")
-        ]
-    ])
+        # Повідомляємо користувача
+        info_message = await update.message.reply_text("Ваше повідомлення відправлено на модерацію ✅")
+        await asyncio.sleep(5)
+        await info_message.delete()
 
-    # Надсилаємо адміну
-    await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=f"Нове повідомлення від @{user.username or user.first_name}:\n\n{text}",
-        reply_markup=keyboard
-    )
+        # Надсилаємо адміну для модерації
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Схвалити", callback_data=f"approve|{user.id}|{text}"),
+                InlineKeyboardButton("❌ Відхилити", callback_data=f"reject|{user.id}")
+            ]
+        ])
 
-    # Видаляємо оригінальне повідомлення
-    await update.message.delete()
-
-    # Тимчасове повідомлення користувачу
-    reply = await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text=f"@{user.username or user.first_name}, ваше повідомлення було відправлено на модерацію ✅"
-    )
-
-    # Чекаємо 5 секунд і видаляємо повідомлення
-    await asyncio.sleep(5)
-    await reply.delete()
-
-# 🧠 Обробка натискання кнопок (модерація)
-async def callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    action, message_id_str = query.data.split("|")
-    message_id = int(message_id_str)
-
-    # Дістаємо дані
-    data = context.user_data.get(message_id)
-    if not data:
-        await query.answer("Дані не знайдено ❌", show_alert=True)
-        return
-
-    username = data["username"]
-    text = data["text"]
-
-    if action == "approve":
-        # Надсилаємо у групу схвалене повідомлення
         await context.bot.send_message(
             chat_id=GROUP_ID,
-            text=f"📩 Повідомлення від @{username}:\n\n{text}"
+            text=f"Повідомлення від @{user.username or user.full_name}:\n\n{text}",
+            reply_markup=keyboard
         )
-        await query.answer("✅ Схвалено")
+
+# === 🔹 Обробка натискання кнопок ===
+async def callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data.split("|")
+    action = data[0]
+    user_id = data[1]
+
+    if action == "approve":
+        text = data[2]
+        await context.bot.send_message(chat_id=GROUP_ID, text=f"✅ {text}")
+        await query.edit_message_text("✅ Повідомлення схвалено!")
     elif action == "reject":
-        await query.answer("❌ Відхилено")
+        await query.edit_message_text("❌ Повідомлення відхилено!")
 
-    # Видаляємо повідомлення з кнопками після вибору
-    await query.message.delete()
+# === 🔹 Вебсервер для Render ===
+async def handle(request):
+    return web.Response(text="Bot is running!")
 
-# 🚀 Запуск бота
-def main():
+async def run_web():
+    app = web.Application()
+    app.router.add_get('/', handle)
+    port = int(os.environ.get("PORT", 10000))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
+def start_web():
+    import asyncio
+    asyncio.run(run_web())
+
+threading.Thread(target=start_web).start()
+
+# === 🔹 Запуск бота ===
+async def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # Зберігаємо ID в контекст
-    app.bot_data["ADMIN_ID"] = ADMIN_ID
-    app.bot_data["GROUP_ID"] = GROUP_ID
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_message))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     app.add_handler(CallbackQueryHandler(callback_query))
 
-    app.run_polling()
+    print("✅ Бот запущений і працює!")
+    await app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
