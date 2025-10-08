@@ -1,4 +1,2 @@
-python-telegram-bot>=22.0
-fastapi>=0.95
-uvicorn>=0.23.2
-gunicorn
+python-telegram-bot==20.3
+aiohttp==3.8.5
